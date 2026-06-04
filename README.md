@@ -6,8 +6,13 @@ SudoPsPsPs is an assistive robotic cat designed to provide companionship and pro
 
 This repository currently contains the head control subsystem, which provides ROS2-based control of a pan-tilt mechanism driven by Dynamixel XL430-W250-T servos through an OpenCR controller.
 
+<p align="center">
 ![Alt Text](Images/Image%201.png)
+</p>
+
+<p align="center">
 ![Alt Text](Images/Completed%20Build%20Image%201.png)
+</p>
 ---
 
 ## Hardware
