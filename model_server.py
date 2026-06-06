@@ -12,7 +12,7 @@
 #  3. Start the server:
 #       /opt/anaconda3/envs/liquid_env/bin/python3 model_server.py
 #
-# ═══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
 
 import gc
 import re
@@ -295,16 +295,17 @@ def infer(req: InferRequest):
             message = data.get("message_to_user", "")
             
             if message:
-                # 2. Path configuration for Mac
-                model_path = "/home/ri-one/SudoPspsps/SudoPsPsPs/sudo_pspsps/sudo_pspsps/en_US-amy-low.onnx"
+                # 2. Dynamic path configuration (Works on any laptop)
+                BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+                PIPER_BIN = os.path.join(BASE_DIR, "piper", "piper")
+                MODEL_FILE = os.path.join(BASE_DIR, "models", "en_US-amy-low.onnx")
                 temp_wav = f"/tmp/speech_{uuid.uuid4()}.wav"
                 
-                # 3. Generate audio to a temporary file using piper
-                # Note: We use --output-file for better compatibility with afplay
-                cmd_gen = f'echo "{message}" | piper --model {model_path} --output_file {temp_wav}'
+                # 3. Generate audio using dynamic paths
+                cmd_gen = f'echo "{message}" | {PIPER_BIN} --model {MODEL_FILE} --output_file {temp_wav}'
                 subprocess.run(cmd_gen, shell=True)
                 
-                # 4. Play audio using afplay (macOS native)
+                # 4. Play audio using afplay
                 if os.path.exists(temp_wav):
                     subprocess.run(["afplay", temp_wav])
                     os.remove(temp_wav) # Cleanup
@@ -315,7 +316,6 @@ def infer(req: InferRequest):
         logger.error(f"TTS/Audio failed: {e}")
 
     return {"result": raw}
-
 
 @app.post("/infer_vision")
 def infer_vision(req: VisionInferRequest):
