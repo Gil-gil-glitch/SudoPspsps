@@ -16,6 +16,8 @@
 
 import gc
 import io
+import logging
+import traceback
 import os
 import base64
 import multiprocessing
@@ -178,39 +180,46 @@ def infer(req: InferRequest):
         {"role": "system", "content": system_prompt},
         {"role": "user",   "content": req.user_prompt},
     ]
-    print(messages)
+    logger.info("→ /infer user_prompt[:120]: %s", req.user_prompt[:120])
 
     text = brain_processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
 
-    # FIX #2 (continued): flush stale MPS buffers *before* we
-    # allocate new tensors for this request, so the allocator
-    # always starts from a clean baseline.
     flush_mps_cache()
 
     inputs = brain_processor.tokenizer(text, return_tensors="pt").to(DEVICE)
 
-    with torch.no_grad():
-        outputs = brain_model.generate(
-            **inputs,
-            max_new_tokens=256,
-            temperature=0.7,
-            do_sample=True,
-            repetition_penalty=1.1,
-        )
+    try:
+        with torch.no_grad():
+            # FIX #3: greedy decoding (do_sample=False) on MPS is far more
+            # stable than sampling.  PyTorch's MPS multinomial / topk kernels
+            # have known assertion failures on certain logit distributions that
+            # kill the worker process outright.  Greedy avoids those kernels
+            # entirely and is fast enough for short conversational replies.
+            outputs = brain_model.generate(
+                **inputs,
+                max_new_tokens=256,
+                do_sample=False,          # was: do_sample=True, temperature=0.7
+                repetition_penalty=1.1,
+            )
+    except Exception:
+        # Log the full Metal / CUDA stack trace before the worker dies so
+        # we can diagnose future crashes from the log file.
+        logger.error("brain_model.generate() failed:\n%s", traceback.format_exc())
+        del inputs
+        flush_mps_cache()
+        raise  # re-raise so FastAPI returns 500 and the client gets a clean error
 
     input_len = inputs["input_ids"].shape[1]
     raw = brain_processor.tokenizer.decode(
         outputs[0][input_len:], skip_special_tokens=True
     ).strip()
 
-    # FIX #2 (continued): release the output tensor and flush the
-    # MPS cache *after* generation so the next request has headroom.
     del inputs, outputs
     flush_mps_cache()
 
-    print(f"[/infer] response: {raw}")
+    logger.info("[/infer] response: %s", raw)
     return {"result": raw}
 
 
@@ -244,13 +253,18 @@ def infer_vision(req: VisionInferRequest):
         return_tensors="pt",
     ).to(DEVICE)
 
-    with torch.no_grad():
-        out = vision_model.generate(
-            **inputs,
-            max_new_tokens=150,
-            temperature=0.7,
-            do_sample=True,
-        )
+    try:
+        with torch.no_grad():
+            out = vision_model.generate(
+                **inputs,
+                max_new_tokens=150,
+                do_sample=False,   # greedy — avoids MPS sampling kernel crashes
+            )
+    except Exception:
+        logger.error("vision_model.generate() failed:\n%s", traceback.format_exc())
+        del inputs
+        flush_mps_cache()
+        raise
 
     response = vision_processor.decode(
         out[0][inputs["input_ids"].shape[1]:],
@@ -264,7 +278,34 @@ def infer_vision(req: VisionInferRequest):
 
 
 # ─────────────────────────────────────────────
-#  ENTRY POINT
+#  LOGGING + ENTRY POINT
+#  Surface MPS/Metal assertion failures that uvicorn
+#  would otherwise swallow silently
 # ─────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.error("Unhandled exception:\n%s", traceback.format_exc())
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # FIX #3: run with multiple workers so one crash doesn't take
+    # the whole server down, and log to a file so Metal assertion
+    # failures are visible even after the worker process exits.
+    uvicorn.run(
+        "model_server:app",
+        host="0.0.0.0",
+        port=8000,
+        workers=2,           # one worker can die and be replaced
+        log_level="info",
+        access_log=True,
+        timeout_keep_alive=30,
+    )
