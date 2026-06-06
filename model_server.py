@@ -106,6 +106,7 @@ INFO:     10.42.0.1:36944 - "POST /infer HTTP/1.1" 200 OK
 
 """
 import gc
+import re
 import io
 import logging
 import traceback
@@ -204,6 +205,23 @@ DEFAULT_SYSTEM_PROMPT = (
     "Never include anything outside the JSON object."
 )
 
+#For vision nodes# ── Vision (VAD emotion analysis) prompts ─────
+VISION_SYSTEM_PROMPT = (
+    "You are an expert emotion analysis assistant for a robot. "
+    "Predict Valence, Arousal, and Dominance (VAD) scores (1-10 scale). "
+    "You MUST include a rationale for EACH score."
+)
+ 
+# bbox is formatted server-side from the bbox list sent by the client
+VISION_USER_PROMPT_TEMPLATE = (
+    "Two images are provided:\n"
+    "  • Image 1: the full scene with a green bounding box at pixel coordinates {bbox}.\n"
+    "  • Image 2: a close-up crop of that person.\n\n"
+    "Analyze this person's emotion using both images for context.\n"
+    "1. Explain the rationale in 2 sentences.\n"
+    "2. On a new line for each, output ONLY: 'Valence: [num]', 'Arousal: [num]', 'Dominance: [num]'."
+)
+
 
 # ─────────────────────────────────────────────
 #  MPS MEMORY HELPER
@@ -222,6 +240,17 @@ def flush_mps_cache():
     elif DEVICE == "cuda":
         torch.cuda.empty_cache()
     gc.collect()
+
+# ─────────────────────────────────────────────
+#  LOGGING + ENTRY POINT
+#  Surface MPS/Metal assertion failures that uvicorn
+#  would otherwise swallow silently
+# ─────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────
@@ -290,8 +319,7 @@ class InferRequest(BaseModel):
     user_prompt: str
 
 class VisionInferRequest(BaseModel):
-    system_prompt: str | None = None
-    user_prompt: str
+    bbox: list[float]          # [xmin, ymin, xmax, ymax]
     full_image_b64: str
     crop_image_b64: str
 
@@ -351,68 +379,106 @@ def infer(req: InferRequest):
 
 @app.post("/infer_vision")
 def infer_vision(req: VisionInferRequest):
-    system_prompt = req.system_prompt or DEFAULT_SYSTEM_PROMPT
-
+    # ── Build prompts server-side — nothing sensitive travels over the network ──
+    bbox_str = (
+        f"xmin={int(req.bbox[0])}, ymin={int(req.bbox[1])}, "
+        f"xmax={int(req.bbox[2])}, ymax={int(req.bbox[3])}"
+    )
+    user_prompt = VISION_USER_PROMPT_TEMPLATE.format(bbox=bbox_str)
+ 
     full_img = PILImage.open(io.BytesIO(base64.b64decode(req.full_image_b64))).convert("RGB")
     crop_img = PILImage.open(io.BytesIO(base64.b64decode(req.crop_image_b64))).convert("RGB")
-
+ 
     messages = [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": VISION_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": [
                 {"type": "image"},
                 {"type": "image"},
-                {"type": "text", "text": req.user_prompt},
+                {"type": "text", "text": user_prompt},
             ],
         },
     ]
+    logger.info("→ /infer_vision bbox: %s", bbox_str)
+ 
+    # Step 1: apply chat template (text portion only)
     text = vision_processor.apply_chat_template(
-        messages, add_generation_prompt=True, tokenize=False
+        messages, tokenize=False, add_generation_prompt=True
     )
-
+ 
     flush_mps_cache()
-
+ 
+    # Step 2: tokenise text + images together
     inputs = vision_processor(
-        images=[full_img, crop_img],
         text=[text],
+        images=[full_img, crop_img],
         return_tensors="pt",
     ).to(INFER_DEVICE)
-
+ 
+    # Step 3: generate
     try:
         with torch.no_grad():
-            out = vision_model.generate(
+            outputs = vision_model.generate(
                 **inputs,
-                max_new_tokens=150,
-                do_sample=False,
+                max_new_tokens=512,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9,
+                repetition_penalty=1.3,
             )
     except Exception:
         logger.error("vision_model.generate() failed:\n%s", traceback.format_exc())
         del inputs
         flush_mps_cache()
         raise
-
-    response = vision_processor.decode(
-        out[0][inputs["input_ids"].shape[1]:],
-        skip_special_tokens=True,
+ 
+    # Step 4: decode only the new tokens
+    input_len = inputs["input_ids"].shape[1]
+    raw = vision_processor.tokenizer.decode(
+        outputs[0][input_len:], skip_special_tokens=True
     ).strip()
-
-    del inputs, out
+ 
+    del inputs, outputs
     flush_mps_cache()
+ 
+    logger.info("[/infer_vision] raw response: %s", raw)
+ 
+    # ── Parse VAD scores server-side ──────────────────────────────
+    # Primary: look for labelled lines e.g. "Valence: 7.5"
+    vad = {}
+    for label in ("valence", "arousal", "dominance"):
+        match = re.search(rf"{label}:\s*([\d.]+)", raw, re.IGNORECASE)
+        if match:
+            vad[label] = float(match.group(1))
+ 
+    if len(vad) == 3:
+        scores = vad
+    else:
+        # Fallback: grab first three numbers anywhere in the response
+        nums = re.findall(r"[-+]?\d*\.\d+|\d+", raw)
+        fallback = [float(n) for n in nums[:3]] if len(nums) >= 3 else [5.0, 5.0, 5.0]
+        scores = {
+            "valence":   fallback[0],
+            "arousal":   fallback[1],
+            "dominance": fallback[2],
+        }
+ 
+    logger.info(
+        "[/infer_vision] VAD — V:%.1f A:%.1f D:%.1f",
+        scores["valence"], scores["arousal"], scores["dominance"],
+    )
+    
+    return {
+        "valence":   scores["valence"],
+        "arousal":   scores["arousal"],
+        "dominance": scores["dominance"],
+        "raw":       raw,   # kept for client-side logging/debugging
+    }
+ 
 
-    return {"result": response}
 
 
-# ─────────────────────────────────────────────
-#  LOGGING + ENTRY POINT
-#  Surface MPS/Metal assertion failures that uvicorn
-#  would otherwise swallow silently
-# ─────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-logger = logging.getLogger(__name__)
 
 
 @app.exception_handler(Exception)
