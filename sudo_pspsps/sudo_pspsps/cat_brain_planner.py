@@ -10,7 +10,7 @@ from datetime import datetime
 # ─────────────────────────────────────────────
 #  CONFIG  — set to laptop A's ethernet IP
 # ─────────────────────────────────────────────
-INFERENCE_SERVER = "http://192.168.43.146:8000"
+INFERENCE_SERVER = "http://10.42.0.2:8000"
 
 # SYSTEM_PROMPT removed — it now lives in model_server.py (DEFAULT_SYSTEM_PROMPT).
 # Keeping it here and re-transmitting it on every request was the main driver of
