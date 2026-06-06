@@ -12,21 +12,14 @@ from datetime import datetime
 # ─────────────────────────────────────────────
 INFERENCE_SERVER = "http://192.168.43.146:8000"
 
-# ─────────────────────────────────────────────
-#  SYSTEM PROMPT
-# ─────────────────────────────────────────────
-SYSTEM_PROMPT = (
-    "You are Sudo, a warm and emotionally-aware robot assistant. "
-    "Your tone is friendly, caring, and lightly playful — like a thoughtful colleague. "
-    "You are aware of the user's current emotional state (VAD score: Valence 0-10, Arousal 0-10, Dominance 0-10). "
-    "You also receive a visual observation from a camera describing what the user looks like right now. "
-    "The visual observation takes priority over VAD scores if they conflict. "
-    "\n\nYou must ALWAYS respond with valid JSON in this exact format:\n"
-    '{"action": "<ACTION>", "reasoning": "<why>", "message_to_user": "<what you say>"}\n'
-    "\nValid actions: CHAT, PLAY_MUSIC, POSTPONE_TASK, CANCEL_TASK, "
-    "ASK_TASK_INFO, CONFIRM_TASK, SEND_REMINDER, SUGGEST_REST\n"
-    "Never include anything outside the JSON object."
-)
+# SYSTEM_PROMPT removed — it now lives in model_server.py (DEFAULT_SYSTEM_PROMPT).
+# Keeping it here and re-transmitting it on every request was the main driver of
+# the MPS OOM crash (larger tokenisation → larger intermediate buffers → 17 GB
+# Metal allocation failure).  The server falls back to its built-in prompt when
+# system_prompt is omitted from the request body.
+#
+# The intervention-gate call below still sends its own one-off system prompt
+# because it needs a different JSON schema ({should_intervene, reason}).
 
 # ─────────────────────────────────────────────
 #  HELPERS
@@ -136,14 +129,22 @@ class CatBrainPlanner(Node):
     # ─────────────────────────────────────────────────────────────────────
     #  LLM WRAPPER  — now just an HTTP call
     # ─────────────────────────────────────────────────────────────────────
-    def run_llm(self, user_prompt: str) -> dict:
+    def run_llm(self, user_prompt: str, system_prompt: str | None = None) -> dict:
+        """Call the inference server.
+
+        system_prompt is optional — omit it to use the server's built-in
+        DEFAULT_SYSTEM_PROMPT (the normal Sudo persona).  Pass an explicit
+        value only when you need a different response schema, e.g. the
+        intervention-gate check that returns {should_intervene, reason}.
+        """
+        payload: dict = {"user_prompt": user_prompt}
+        if system_prompt is not None:
+            payload["system_prompt"] = system_prompt
+
         try:
             resp = requests.post(
                 f"{INFERENCE_SERVER}/infer",
-                json={
-                    "system_prompt": SYSTEM_PROMPT,
-                    "user_prompt":   user_prompt,
-                },
+                json=payload,
                 timeout=30.0,
             )
             resp.raise_for_status()
@@ -173,7 +174,14 @@ class CatBrainPlanner(Node):
             "Should the robot assistant proactively check in on the user right now? "
             "Reply ONLY with valid JSON: {\"should_intervene\": true/false, \"reason\": \"...\"}"
         )
-        result = self.run_llm(prompt)
+        # Pass a lightweight one-off system prompt so the server doesn't apply
+        # the full Sudo persona (which expects a different JSON schema).
+        gate_system = (
+            "You are a concise decision engine. "
+            "Always reply with valid JSON only: "
+            '{"should_intervene": true/false, "reason": "<short reason>"}'
+        )
+        result = self.run_llm(prompt, system_prompt=gate_system)
         return bool(result.get("should_intervene", False))
 
     # ─────────────────────────────────────────────────────────────────────
