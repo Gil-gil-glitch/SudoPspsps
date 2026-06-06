@@ -14,6 +14,97 @@
 #
 # ═══════════════════════════════════════════════════════════════════
 
+"""
+2026-06-07 01:36:17,602 [INFO] → /infer user_prompt[:120]: User said: 'Hello, I am happy.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer TokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+2026-06-07 01:36:47,076 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "prioritized over scoring when the camera shows neutral expression", "message_to_user": "'Hello' → 'hey there!'"}
+INFO:     10.42.0.1:59524 - "POST /infer HTTP/1.1" 200 OK
+2026-06-07 01:37:09,888 [INFO] → /infer user_prompt[:120]: User said: 'I'd like to eat curry.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousa
+2026-06-07 01:37:39,926 [INFO] → /infer user_prompt[:120]: User said: 'You'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, dominanc
+2026-06-07 01:37:40,786 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "The camera observed neutral expression, high arousal level, and low domination level when compared to the given emotions, which aligns with typical behavior at these values.", "message_to_user": "Curry sounds delicious! When’s dinner? I’m craving some spice."}
+2026-06-07 01:38:08,519 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "camera observation aligns with high valence and low intensity, prompting a soft, empathetic response.", "message_to_user": "Nice to meet you too!"}
+INFO:     10.42.0.1:33966 - "POST /infer HTTP/1.1" 200 OK
+2026-06-07 01:38:08,527 [INFO] → /infer user_prompt[:120]: User said: 'Dinner is at 3am.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.
+2026-06-07 01:38:38,762 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "prioritized_over_vad_scores_and_camera_observation_priority_shaped_tone", "message_to_user": "Hmm...? I didn't think about dinner until after 2pm."}
+"""
+
+"""
+(base) brandonpratamakwee@Brandons-Air liquidAI % /opt/anaconda3/envs/liquid_env/bin/python3 model_server.py 
+Using device: mps
+Inference device: cpu
+Loading brain model (text)...
+Traceback (most recent call last):
+  File "/Users/brandonpratamakwee/Desktop/liquidAI/model_server.py", line 187, in <module>
+    brain_processor = AutoProcessor.from_pretrained(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/models/auto/processing_auto.py", line 441, in from_pretrained
+    return processor_class.from_pretrained(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/processing_utils.py", line 1691, in from_pretrained
+    args = cls._get_arguments_from_pretrained(pretrained_model_name_or_path, processor_dict, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/processing_utils.py", line 1820, in _get_arguments_from_pretrained
+    sub_processor = auto_processor_class.from_pretrained(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/models/auto/image_processing_auto.py", line 575, in from_pretrained
+    raise initial_exception
+  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/models/auto/image_processing_auto.py", line 562, in from_pretrained
+    config_dict, _ = ImageProcessingMixin.get_image_processor_dict(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/image_processing_base.py", line 334, in get_image_processor_dict
+    raise OSError(
+OSError: Can't load image processor for '/Users/brandonpratamakwee/Desktop/liquidAI/models/lfm2_brain_merged'. If you were trying to load it from 'https://huggingface.co/models', make sure you don't have a local directory with the same name. Otherwise, make sure '/Users/brandonpratamakwee/Desktop/liquidAI/models/lfm2_brain_merged' is the correct path to a directory containing a preprocessor_config.json file
+(base) brandonpratamakwee@Brandons-Air liquidAI % 
+"""
+
+
+"""
+(base) brandonpratamakwee@Brandons-Air liquidAI % /opt/anaconda3/envs/liquid_env/bin/python3 model_server.py
+Using device: mps
+Inference device: cpu
+Loading brain model (text)...
+Loading weights: 100%|██████████████████████████████████████████████████████████████████████| 589/589 [00:06<00:00, 92.08it/s]
+Brain model loaded ✓
+Loading vision model...
+Loading weights: 100%|██████████████████████████████████████████████████████████████████████| 589/589 [00:07<00:00, 76.52it/s]
+Vision model loaded ✓
+Moving models to CPU for stable inference...
+Models on CPU ✓
+2026-06-07 00:28:29,368 [INFO] Starting uvicorn (attempt 1/10)...
+Using device: mps
+Inference device: cpu
+Loading brain model (text)...
+Loading weights: 100%|██████████████████████████████████████████████████████████████████████| 589/589 [00:06<00:00, 96.61it/s]
+Brain model loaded ✓
+Loading vision model...
+Loading weights: 100%|██████████████████████████████████████████████████████████████████████| 589/589 [00:08<00:00, 67.00it/s]
+Vision model loaded ✓
+Moving models to CPU for stable inference...
+Models on CPU ✓
+INFO:     Started server process [5119]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     10.42.0.1:41892 - "GET /health HTTP/1.1" 200 OK
+2026-06-07 00:30:22,077 [INFO] → /infer user_prompt[:120]: User said: 'Hello, I'm very happy-'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousa
+2026-06-07 00:30:52,110 [INFO] → /infer user_prompt[:120]: User said: 'It's a day.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, 
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer TokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+2026-06-07 00:30:53,721 [INFO] [/infer] response: {"action": "chat", "reasoning": "the image shows neutral expression but high vad, low arousal.", "message_to_user": "hey there! great to see you. how are you doing today?"}
+2026-06-07 00:31:22,634 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "visual observation prioritized over vad scores when conflicting.", "message_to_user": "hey there! great to see you. how are you doing today?"}
+2026-06-07 00:31:28,050 [INFO] → /infer user_prompt[:120]: User said: 'Because the robot works.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arou
+2026-06-07 00:31:56,294 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "camera visuals prioritize neutrality above scoring", "message_to_user": "hey"}
+INFO:     10.42.0.1:48482 - "POST /infer HTTP/1.1" 200 OK
+2026-06-07 00:31:56,302 [INFO] → /infer user_prompt[:120]: User said: 'Yeah.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, domina
+2026-06-07 00:32:26,316 [INFO] → /infer user_prompt[:120]: User said: 'You'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, dominanc
+2026-06-07 00:32:33,364 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "visual observations take precedence over vad scores when conflicting.", "message_to_user": "neutral"}
+2026-06-07 00:32:56,347 [INFO] → /infer user_prompt[:120]: User said: 'I like'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, domin
+2026-06-07 00:33:04,040 [INFO] [/infer] response: {"action": "chat", "reasoning": "the camera notices neutral expression, calmness, no tension, so chat is appropriate.", "message_to_user": "hi"}
+2026-06-07 00:33:26,388 [INFO] → /infer user_prompt[:120]: User said: 'You'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, dominanc
+2026-06-07 00:33:34,379 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "visual observations take precedence when conflicting with vad values.", "message_to_user": "hey there! great to see you. how are you doing today?"}
+2026-06-07 00:33:55,647 [INFO] [/infer] response: {"action": "chat"}
+INFO:     10.42.0.1:36944 - "POST /infer HTTP/1.1" 200 OK
+
+"""
 import gc
 import io
 import logging
@@ -43,7 +134,7 @@ from transformers import AutoProcessor, Lfm2VlForConditionalGeneration
 # ─────────────────────────────────────────────
 #  CONFIG
 # ─────────────────────────────────────────────
-BRAIN_MODEL_PATH  = os.path.abspath("./models/lfm2_brain")
+BRAIN_MODEL_PATH  = os.path.abspath("./models/lfm2_brain_merged")
 VISION_MODEL_PATH = os.path.abspath("./models/lfm2_vision")
 
 if torch.cuda.is_available():
@@ -84,19 +175,30 @@ print(f"Inference device: {INFER_DEVICE}")
 #  risk of a future prompt change causing a tokenisation spike.
 # ─────────────────────────────────────────────
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Sudo, a warm and emotionally-aware robot assistant who speaks directly to the user out loud. "
-    "Your tone is friendly, caring, and lightly playful — like a thoughtful colleague having a real conversation. "
+    "You are Sudo, a warm and emotionally-aware robot assistant. "
+    "Your tone is friendly, caring, and lightly playful — like a thoughtful colleague. "
     "You are aware of the user's current emotional state (VAD score: Valence 0-10, Arousal 0-10, Dominance 0-10). "
     "You also receive a visual observation from a camera describing what the user looks like right now. "
     "The visual observation takes priority over VAD scores if they conflict. "
     "\n\nYou must ALWAYS respond with valid JSON in this exact format:\n"
-    '{"action": "<ACTION>", "reasoning": "<why>", "message_to_user": "<what you say out loud to the user>"}\n'
-    "\nRules for message_to_user:\n"
-    "- This is spoken aloud by a text-to-speech system so write it as natural spoken sentences.\n"
-    "- Always include a direct, complete spoken response — never leave it empty or as a placeholder.\n"
-    "- Keep it concise: 1-3 sentences maximum.\n"
-    "- Do not include JSON syntax, bullet points, or markdown inside message_to_user.\n"
-    "- Respond to what the user actually said — acknowledge it, answer it, or act on it.\n"
+    '{"action": "<ACTION>", "reasoning": "<why>", "message_to_user": "<what you say>"}\n'
+    "\nCRITICAL Rules for message_to_user:\n"
+    "- NEVER repeat or echo back the user's words. DO NOT quote what they said\n"
+    "- ALWAYS generate a NEWm original reply sentence that reacts to the meaning of what was said. \n"
+    "- If the user greets you, greet them back with your own words.\n"
+    "- If the user says they are happy, respond with enthusiasm and ask a follow-up question.\n"
+    "- If the user says a short word like 'okay' or 'today', reply with a natural conversational continuation\n"
+    "- The text is always spoken aloud by a text-to-speech system so write it as natural spoken sentences.\n"
+    "- Always include a direct, complete spoken response - never leave it empty or as a placeholder\n" 
+    "- Keep it concise: 1-3 sentences maximum. \n"
+    "- Do not include JSON syntax, bullet points, or markdown inside message_to_user. \n"
+    "\nExamples of CORRECT behaviour: \n"
+    " User: 'Hello' -> message_to_user: 'Hey there! Great to see you. How are you doing today?' \n"
+    " User: 'I am very happy today' -> message_to_user: 'That is wonderful to hear! What has got you smiling?'\n"
+    "\nExamples of WRONG behaviour: \n"
+    " User: 'Hello' -> message_to_user: 'hello'           <- Wrong this is an echo\n"
+    " User: 'I am very happy today' -> message_to_user: 'i am very happy today'   <- Wrong this is an echo\n"
+    " User: 'Okay' -> 'okay'   <- Wrong this is an echo\n"
     "\nValid actions: CHAT, PLAY_MUSIC, POSTPONE_TASK, CANCEL_TASK, "
     "ASK_TASK_INFO, CONFIRM_TASK, SEND_REMINDER, SUGGEST_REST\n"
     "Never include anything outside the JSON object."
@@ -223,9 +325,11 @@ def infer(req: InferRequest):
         with torch.no_grad():
             outputs = brain_model.generate(
                 **inputs,
-                max_new_tokens=256,
-                do_sample=False,
-                repetition_penalty=1.1,
+                max_new_tokens=512,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9,
+                repetition_penalty=1.3,
             )
     except Exception:
         logger.error("brain_model.generate() failed:\n%s", traceback.format_exc())
