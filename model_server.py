@@ -14,97 +14,6 @@
 #
 # ═══════════════════════════════════════════════════════════════════
 
-"""
-2026-06-07 01:36:17,602 [INFO] → /infer user_prompt[:120]: User said: 'Hello, I am happy.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5
-[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer TokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
-2026-06-07 01:36:47,076 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "prioritized over scoring when the camera shows neutral expression", "message_to_user": "'Hello' → 'hey there!'"}
-INFO:     10.42.0.1:59524 - "POST /infer HTTP/1.1" 200 OK
-2026-06-07 01:37:09,888 [INFO] → /infer user_prompt[:120]: User said: 'I'd like to eat curry.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousa
-2026-06-07 01:37:39,926 [INFO] → /infer user_prompt[:120]: User said: 'You'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, dominanc
-2026-06-07 01:37:40,786 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "The camera observed neutral expression, high arousal level, and low domination level when compared to the given emotions, which aligns with typical behavior at these values.", "message_to_user": "Curry sounds delicious! When’s dinner? I’m craving some spice."}
-2026-06-07 01:38:08,519 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "camera observation aligns with high valence and low intensity, prompting a soft, empathetic response.", "message_to_user": "Nice to meet you too!"}
-INFO:     10.42.0.1:33966 - "POST /infer HTTP/1.1" 200 OK
-2026-06-07 01:38:08,527 [INFO] → /infer user_prompt[:120]: User said: 'Dinner is at 3am.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.
-2026-06-07 01:38:38,762 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "prioritized_over_vad_scores_and_camera_observation_priority_shaped_tone", "message_to_user": "Hmm...? I didn't think about dinner until after 2pm."}
-"""
-
-"""
-(base) brandonpratamakwee@Brandons-Air liquidAI % /opt/anaconda3/envs/liquid_env/bin/python3 model_server.py 
-Using device: mps
-Inference device: cpu
-Loading brain model (text)...
-Traceback (most recent call last):
-  File "/Users/brandonpratamakwee/Desktop/liquidAI/model_server.py", line 187, in <module>
-    brain_processor = AutoProcessor.from_pretrained(
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/models/auto/processing_auto.py", line 441, in from_pretrained
-    return processor_class.from_pretrained(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/processing_utils.py", line 1691, in from_pretrained
-    args = cls._get_arguments_from_pretrained(pretrained_model_name_or_path, processor_dict, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/processing_utils.py", line 1820, in _get_arguments_from_pretrained
-    sub_processor = auto_processor_class.from_pretrained(
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/models/auto/image_processing_auto.py", line 575, in from_pretrained
-    raise initial_exception
-  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/models/auto/image_processing_auto.py", line 562, in from_pretrained
-    config_dict, _ = ImageProcessingMixin.get_image_processor_dict(
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/anaconda3/envs/liquid_env/lib/python3.12/site-packages/transformers/image_processing_base.py", line 334, in get_image_processor_dict
-    raise OSError(
-OSError: Can't load image processor for '/Users/brandonpratamakwee/Desktop/liquidAI/models/lfm2_brain_merged'. If you were trying to load it from 'https://huggingface.co/models', make sure you don't have a local directory with the same name. Otherwise, make sure '/Users/brandonpratamakwee/Desktop/liquidAI/models/lfm2_brain_merged' is the correct path to a directory containing a preprocessor_config.json file
-(base) brandonpratamakwee@Brandons-Air liquidAI % 
-"""
-
-
-"""
-(base) brandonpratamakwee@Brandons-Air liquidAI % /opt/anaconda3/envs/liquid_env/bin/python3 model_server.py
-Using device: mps
-Inference device: cpu
-Loading brain model (text)...
-Loading weights: 100%|██████████████████████████████████████████████████████████████████████| 589/589 [00:06<00:00, 92.08it/s]
-Brain model loaded ✓
-Loading vision model...
-Loading weights: 100%|██████████████████████████████████████████████████████████████████████| 589/589 [00:07<00:00, 76.52it/s]
-Vision model loaded ✓
-Moving models to CPU for stable inference...
-Models on CPU ✓
-2026-06-07 00:28:29,368 [INFO] Starting uvicorn (attempt 1/10)...
-Using device: mps
-Inference device: cpu
-Loading brain model (text)...
-Loading weights: 100%|██████████████████████████████████████████████████████████████████████| 589/589 [00:06<00:00, 96.61it/s]
-Brain model loaded ✓
-Loading vision model...
-Loading weights: 100%|██████████████████████████████████████████████████████████████████████| 589/589 [00:08<00:00, 67.00it/s]
-Vision model loaded ✓
-Moving models to CPU for stable inference...
-Models on CPU ✓
-INFO:     Started server process [5119]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     10.42.0.1:41892 - "GET /health HTTP/1.1" 200 OK
-2026-06-07 00:30:22,077 [INFO] → /infer user_prompt[:120]: User said: 'Hello, I'm very happy-'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousa
-2026-06-07 00:30:52,110 [INFO] → /infer user_prompt[:120]: User said: 'It's a day.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, 
-[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer TokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
-2026-06-07 00:30:53,721 [INFO] [/infer] response: {"action": "chat", "reasoning": "the image shows neutral expression but high vad, low arousal.", "message_to_user": "hey there! great to see you. how are you doing today?"}
-2026-06-07 00:31:22,634 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "visual observation prioritized over vad scores when conflicting.", "message_to_user": "hey there! great to see you. how are you doing today?"}
-2026-06-07 00:31:28,050 [INFO] → /infer user_prompt[:120]: User said: 'Because the robot works.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arou
-2026-06-07 00:31:56,294 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "camera visuals prioritize neutrality above scoring", "message_to_user": "hey"}
-INFO:     10.42.0.1:48482 - "POST /infer HTTP/1.1" 200 OK
-2026-06-07 00:31:56,302 [INFO] → /infer user_prompt[:120]: User said: 'Yeah.'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, domina
-2026-06-07 00:32:26,316 [INFO] → /infer user_prompt[:120]: User said: 'You'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, dominanc
-2026-06-07 00:32:33,364 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "visual observations take precedence over vad scores when conflicting.", "message_to_user": "neutral"}
-2026-06-07 00:32:56,347 [INFO] → /infer user_prompt[:120]: User said: 'I like'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, domin
-2026-06-07 00:33:04,040 [INFO] [/infer] response: {"action": "chat", "reasoning": "the camera notices neutral expression, calmness, no tension, so chat is appropriate.", "message_to_user": "hi"}
-2026-06-07 00:33:26,388 [INFO] → /infer user_prompt[:120]: User said: 'You'. Visual observation from camera: 'Neutral'. Emotion scores — valence: 5.0/10, arousal: 5.0/10, dominanc
-2026-06-07 00:33:34,379 [INFO] [/infer] response: {"action": "CHAT", "reasoning": "visual observations take precedence when conflicting with vad values.", "message_to_user": "hey there! great to see you. how are you doing today?"}
-2026-06-07 00:33:55,647 [INFO] [/infer] response: {"action": "chat"}
-INFO:     10.42.0.1:36944 - "POST /infer HTTP/1.1" 200 OK
-
-"""
 import gc
 import re
 import io
@@ -114,6 +23,9 @@ import os
 import base64
 import multiprocessing
 import warnings
+import json
+import subprocess
+import uuid
 
 warnings.filterwarnings(
     "ignore",
@@ -374,6 +286,34 @@ def infer(req: InferRequest):
     flush_mps_cache()
 
     logger.info("[/infer] response: %s", raw)
+
+    try:
+        # 1. Clean raw output to extract only the JSON object
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            message = data.get("message_to_user", "")
+            
+            if message:
+                # 2. Path configuration for Mac
+                model_path = "/home/ri-one/SudoPspsps/SudoPsPsPs/sudo_pspsps/sudo_pspsps/en_US-amy-low.onnx"
+                temp_wav = f"/tmp/speech_{uuid.uuid4()}.wav"
+                
+                # 3. Generate audio to a temporary file using piper
+                # Note: We use --output-file for better compatibility with afplay
+                cmd_gen = f'echo "{message}" | piper --model {model_path} --output_file {temp_wav}'
+                subprocess.run(cmd_gen, shell=True)
+                
+                # 4. Play audio using afplay (macOS native)
+                if os.path.exists(temp_wav):
+                    subprocess.run(["afplay", temp_wav])
+                    os.remove(temp_wav) # Cleanup
+        else:
+            logger.warning("Could not find JSON in model response.")
+            
+    except Exception as e:
+        logger.error(f"TTS/Audio failed: {e}")
+
     return {"result": raw}
 
 
