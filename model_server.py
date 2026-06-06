@@ -60,35 +60,19 @@ print(f"Using device: {DEVICE}")
 
 # MPS has a kernel bug with this model architecture where generation
 # triggers a tensor shape overflow producing a nonsensical 17 GB
-# MTLBuffer allocation that kills the process.  The fix is to move
-# the model to CPU for the generate() call, then move it back to MPS
-# so the next request starts with GPU-resident weights.
+# MTLBuffer allocation that kills the process.
 #
-# The context manager below handles that transparently.
+# Round-tripping the model MPS→CPU→MPS between requests caused a
+# second crash: internal KV-cache buffers created during one generate()
+# call stayed on MPS, so the next call found a device mismatch.
+#
+# Simplest stable solution: load onto MPS for fast weight loading,
+# then move permanently to CPU before the first request.  All
+# generate() calls run on CPU where the kernels are fully stable.
+# For short conversational replies on Apple Silicon M-series this is
+# ~3-8 s per response, which is fine for a robot assistant.
 INFER_DEVICE = "cpu" if DEVICE == "mps" else DEVICE
 print(f"Inference device: {INFER_DEVICE}")
-
-
-from contextlib import contextmanager
-
-@contextmanager
-def on_infer_device(model):
-    """Temporarily move *model* to INFER_DEVICE, yield, then move it back.
-
-    On CUDA or CPU (INFER_DEVICE == DEVICE) this is a no-op so there is
-    no overhead.  On MPS it shifts the weights to CPU before generate()
-    and back to MPS afterwards, keeping them warm for the next request.
-    """
-    if INFER_DEVICE == DEVICE:
-        yield model
-    else:
-        model.to(INFER_DEVICE)
-        flush_mps_cache()
-        try:
-            yield model
-        finally:
-            model.to(DEVICE)
-            flush_mps_cache()
 
 
 # ─────────────────────────────────────────────
@@ -169,8 +153,15 @@ vision_model = Lfm2VlForConditionalGeneration.from_pretrained(
 vision_model.eval()
 print("Vision model loaded ✓")
 
-# Warm up the MPS allocator so the first real request doesn't pay
-# the cold-start cost and immediately stress the allocator.
+# If MPS is the load device, move models permanently to CPU now.
+# This must happen after both models are fully loaded so MPS fast
+# weight loading is still used, but before any generate() call.
+if INFER_DEVICE != DEVICE:
+    print("Moving models to CPU for stable inference...")
+    brain_model.to(INFER_DEVICE)
+    vision_model.to(INFER_DEVICE)
+    print("Models on CPU ✓")
+
 flush_mps_cache()
 
 
@@ -223,7 +214,7 @@ def infer(req: InferRequest):
     inputs = brain_processor.tokenizer(text, return_tensors="pt").to(INFER_DEVICE)
 
     try:
-        with on_infer_device(brain_model), torch.no_grad():
+        with torch.no_grad():
             outputs = brain_model.generate(
                 **inputs,
                 max_new_tokens=256,
@@ -279,7 +270,7 @@ def infer_vision(req: VisionInferRequest):
     ).to(INFER_DEVICE)
 
     try:
-        with on_infer_device(vision_model), torch.no_grad():
+        with torch.no_grad():
             out = vision_model.generate(
                 **inputs,
                 max_new_tokens=150,
