@@ -58,6 +58,16 @@ else:
 
 print(f"Using device: {DEVICE}")
 
+# MPS has a kernel bug with this model architecture where generation
+# triggers a tensor shape overflow, producing a nonsensical 17 GB
+# MTLBuffer allocation request that immediately kills the process.
+# The model loads fine on MPS (fast), but all generate() calls are
+# routed to CPU where the kernels are stable.
+# CPU inference for 256-token conversational replies is ~3-6 seconds
+# on Apple Silicon — acceptable for a robot assistant.
+INFER_DEVICE = "cpu" if DEVICE == "mps" else DEVICE
+print(f"Inference device: {INFER_DEVICE}")
+
 
 # ─────────────────────────────────────────────
 #  SYSTEM PROMPT  (stored server-side)
@@ -188,28 +198,23 @@ def infer(req: InferRequest):
 
     flush_mps_cache()
 
-    inputs = brain_processor.tokenizer(text, return_tensors="pt").to(DEVICE)
+    # Tokenise on CPU, then move to INFER_DEVICE (cpu when MPS is active)
+    # to avoid the MPS 17 GB MTLBuffer overflow bug during generation.
+    inputs = brain_processor.tokenizer(text, return_tensors="pt").to(INFER_DEVICE)
 
     try:
         with torch.no_grad():
-            # FIX #3: greedy decoding (do_sample=False) on MPS is far more
-            # stable than sampling.  PyTorch's MPS multinomial / topk kernels
-            # have known assertion failures on certain logit distributions that
-            # kill the worker process outright.  Greedy avoids those kernels
-            # entirely and is fast enough for short conversational replies.
             outputs = brain_model.generate(
                 **inputs,
                 max_new_tokens=256,
-                do_sample=False,          # was: do_sample=True, temperature=0.7
+                do_sample=False,
                 repetition_penalty=1.1,
             )
     except Exception:
-        # Log the full Metal / CUDA stack trace before the worker dies so
-        # we can diagnose future crashes from the log file.
         logger.error("brain_model.generate() failed:\n%s", traceback.format_exc())
         del inputs
         flush_mps_cache()
-        raise  # re-raise so FastAPI returns 500 and the client gets a clean error
+        raise
 
     input_len = inputs["input_ids"].shape[1]
     raw = brain_processor.tokenizer.decode(
@@ -251,14 +256,14 @@ def infer_vision(req: VisionInferRequest):
         images=[full_img, crop_img],
         text=[text],
         return_tensors="pt",
-    ).to(DEVICE)
+    ).to(INFER_DEVICE)
 
     try:
         with torch.no_grad():
             out = vision_model.generate(
                 **inputs,
                 max_new_tokens=150,
-                do_sample=False,   # greedy — avoids MPS sampling kernel crashes
+                do_sample=False,
             )
     except Exception:
         logger.error("vision_model.generate() failed:\n%s", traceback.format_exc())
