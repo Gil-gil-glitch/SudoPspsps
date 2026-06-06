@@ -297,15 +297,38 @@ async def global_exception_handler(request, exc):
 
 
 if __name__ == "__main__":
-    # FIX #3: run with multiple workers so one crash doesn't take
-    # the whole server down, and log to a file so Metal assertion
-    # failures are visible even after the worker process exits.
-    uvicorn.run(
-        "model_server:app",
-        host="0.0.0.0",
-        port=8000,
-        workers=2,           # one worker can die and be replaced
-        log_level="info",
-        access_log=True,
-        timeout_keep_alive=30,
-    )
+    # FIX #3 (revised): workers=2 caused a double model-load OOM because
+    # uvicorn forks *after* the module-level model loading runs, so each
+    # worker tried to put a full copy of both models onto MPS (9+ GB each).
+    #
+    # Solution: single worker + a restart loop.  If a Metal assertion kills
+    # the process, the loop relaunches it within ~10 s rather than leaving
+    # the server permanently down.  Models are loaded once, in the parent,
+    # before uvicorn starts — the child worker inherits them via fork.
+    import subprocess, sys, time
+    MAX_RESTARTS = 10
+    restarts = 0
+    while restarts < MAX_RESTARTS:
+        logger.info("Starting uvicorn (attempt %d/%d)...", restarts + 1, MAX_RESTARTS)
+        ret = subprocess.run(
+            [
+                sys.executable, "-m", "uvicorn",
+                "model_server:app",
+                "--host", "0.0.0.0",
+                "--port", "8000",
+                "--workers", "1",
+                "--log-level", "info",
+                "--timeout-keep-alive", "30",
+            ]
+        )
+        if ret.returncode == 0:
+            logger.info("Uvicorn exited cleanly.")
+            break
+        restarts += 1
+        logger.error(
+            "Uvicorn worker crashed (exit code %d). Restarting in 5 s... (%d/%d)",
+            ret.returncode, restarts, MAX_RESTARTS,
+        )
+        time.sleep(5)
+    if restarts >= MAX_RESTARTS:
+        logger.critical("Reached max restarts (%d). Giving up.", MAX_RESTARTS)
