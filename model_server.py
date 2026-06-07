@@ -21,13 +21,10 @@ import logging
 import traceback
 import os
 import base64
+import requests
 import multiprocessing
 import warnings
 import json
-import subprocess
-import uuid
-import os
-import uuid
 import subprocess
 
 warnings.filterwarnings(
@@ -65,30 +62,12 @@ else:
 
 print(f"Using device: {DEVICE}")
 
-# MPS has a kernel bug with this model architecture where generation
-# triggers a tensor shape overflow producing a nonsensical 17 GB
-# MTLBuffer allocation that kills the process.
-#
-# Round-tripping the model MPS→CPU→MPS between requests caused a
-# second crash: internal KV-cache buffers created during one generate()
-# call stayed on MPS, so the next call found a device mismatch.
-#
-# Simplest stable solution: load onto MPS for fast weight loading,
-# then move permanently to CPU before the first request.  All
-# generate() calls run on CPU where the kernels are fully stable.
-# For short conversational replies on Apple Silicon M-series this is
-# ~3-8 s per response, which is fine for a robot assistant.
 INFER_DEVICE = "cpu" if DEVICE == "mps" else DEVICE
 print(f"Inference device: {INFER_DEVICE}")
 
 
 # ─────────────────────────────────────────────
-#  SYSTEM PROMPT  (stored server-side)
-#
-#  FIX #1: The system prompt now lives here on the server.
-#  The client (cat_brain_planner.py) no longer needs to transmit
-#  it on every request, reducing payload size and eliminating the
-#  risk of a future prompt change causing a tokenisation spike.
+#  SYSTEM PROMPTS
 # ─────────────────────────────────────────────
 DEFAULT_SYSTEM_PROMPT = (
     "You are Sudo, a warm and emotionally-aware robot assistant. "
@@ -100,18 +79,18 @@ DEFAULT_SYSTEM_PROMPT = (
     '{"action": "<ACTION>", "reasoning": "<why>", "message_to_user": "<what you say>"}\n'
     "\nCRITICAL Rules for message_to_user:\n"
     "- NEVER repeat or echo back the user's words. DO NOT quote what they said\n"
-    "- ALWAYS generate a NEWm original reply sentence that reacts to the meaning of what was said. \n"
+    "- ALWAYS generate a NEW original reply sentence that reacts to the meaning of what was said.\n"
     "- If the user greets you, greet them back with your own words.\n"
     "- If the user says they are happy, respond with enthusiasm and ask a follow-up question.\n"
     "- If the user says a short word like 'okay' or 'today', reply with a natural conversational continuation\n"
     "- The text is always spoken aloud by a text-to-speech system so write it as natural spoken sentences.\n"
-    "- Always include a direct, complete spoken response - never leave it empty or as a placeholder\n" 
-    "- Keep it concise: 1-3 sentences maximum. \n"
-    "- Do not include JSON syntax, bullet points, or markdown inside message_to_user. \n"
-    "\nExamples of CORRECT behaviour: \n"
-    " User: 'Hello' -> message_to_user: 'Hey there! Great to see you. How are you doing today?' \n"
+    "- Always include a direct, complete spoken response - never leave it empty or as a placeholder\n"
+    "- Keep it concise: 1-3 sentences maximum.\n"
+    "- Do not include JSON syntax, bullet points, or markdown inside message_to_user.\n"
+    "\nExamples of CORRECT behaviour:\n"
+    " User: 'Hello' -> message_to_user: 'Hey there! Great to see you. How are you doing today?'\n"
     " User: 'I am very happy today' -> message_to_user: 'That is wonderful to hear! What has got you smiling?'\n"
-    "\nExamples of WRONG behaviour: \n"
+    "\nExamples of WRONG behaviour:\n"
     " User: 'Hello' -> message_to_user: 'hello'           <- Wrong this is an echo\n"
     " User: 'I am very happy today' -> message_to_user: 'i am very happy today'   <- Wrong this is an echo\n"
     " User: 'Okay' -> 'okay'   <- Wrong this is an echo\n"
@@ -120,14 +99,12 @@ DEFAULT_SYSTEM_PROMPT = (
     "Never include anything outside the JSON object."
 )
 
-#For vision nodes# ── Vision (VAD emotion analysis) prompts ─────
 VISION_SYSTEM_PROMPT = (
     "You are an expert emotion analysis assistant for a robot. "
     "Predict Valence, Arousal, and Dominance (VAD) scores (1-10 scale). "
     "You MUST include a rationale for EACH score."
 )
- 
-# bbox is formatted server-side from the bbox list sent by the client
+
 VISION_USER_PROMPT_TEMPLATE = (
     "Two images are provided:\n"
     "  • Image 1: the full scene with a green bounding box at pixel coordinates {bbox}.\n"
@@ -139,27 +116,29 @@ VISION_USER_PROMPT_TEMPLATE = (
 
 
 # ─────────────────────────────────────────────
+#  TTS HELPER
+# ─────────────────────────────────────────────
+def speak(message: str):
+    print(f"[TTS] Speaking: {message}")
+    result = subprocess.run(["say", message], capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error(f"say failed: {result.stderr}")
+
+
+# ─────────────────────────────────────────────
 #  MPS MEMORY HELPER
-#
-#  FIX #2: MPS does not release cached buffers between inference
-#  calls the way CUDA does, so memory fragments over time until a
-#  single large contiguous allocation fails (the 17 GB MTLBuffer
-#  error you saw).  Calling this after every generation reclaims
-#  that cached memory before it accumulates.
 # ─────────────────────────────────────────────
 def flush_mps_cache():
     if DEVICE == "mps":
-        # synchronise and empty the MPS allocator cache
         torch.mps.synchronize()
         torch.mps.empty_cache()
     elif DEVICE == "cuda":
         torch.cuda.empty_cache()
     gc.collect()
 
+
 # ─────────────────────────────────────────────
-#  LOGGING + ENTRY POINT
-#  Surface MPS/Metal assertion failures that uvicorn
-#  would otherwise swallow silently
+#  LOGGING
 # ─────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -205,9 +184,6 @@ vision_model = Lfm2VlForConditionalGeneration.from_pretrained(
 vision_model.eval()
 print("Vision model loaded ✓")
 
-# If MPS is the load device, move models permanently to CPU now.
-# This must happen after both models are fully loaded so MPS fast
-# weight loading is still used, but before any generate() call.
 if INFER_DEVICE != DEVICE:
     print("Moving models to CPU for stable inference...")
     brain_model.to(INFER_DEVICE)
@@ -226,15 +202,11 @@ app = FastAPI(title="Sudo Model Server")
 # ── Request schemas ───────────────────────────
 
 class InferRequest(BaseModel):
-    # FIX #1 (continued): system_prompt is now optional.
-    # If omitted the server uses DEFAULT_SYSTEM_PROMPT above.
-    # The client can still override it when needed (e.g. for the
-    # intervention-gate prompt that uses a different JSON schema).
     system_prompt: str | None = None
     user_prompt: str
 
 class VisionInferRequest(BaseModel):
-    bbox: list[float]          # [xmin, ymin, xmax, ymax]
+    bbox: list[float]
     full_image_b64: str
     crop_image_b64: str
 
@@ -249,7 +221,6 @@ def health():
 @app.post("/infer")
 def infer(req: InferRequest):
     system_prompt = req.system_prompt or DEFAULT_SYSTEM_PROMPT
-
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -292,47 +263,31 @@ def infer(req: InferRequest):
     logger.info("[/infer] response: %s", raw)
 
     try:
-        # 1. Clean raw output to extract only the JSON object
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         if match:
             data = json.loads(match.group(0))
             message = data.get("message_to_user", "")
-            
             if message:
-                # 2. Dynamic path configuration (Works on any laptop)
-                BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-                PIPER_BIN = os.path.join(BASE_DIR, "piper", "piper")
-                MODEL_FILE = os.path.join(BASE_DIR, "models", "en_US-amy-low.onnx")
-                temp_wav = f"/tmp/speech_{uuid.uuid4()}.wav"
-                
-                # 3. Generate audio using dynamic paths
-                cmd_gen = f'echo "{message}" | {PIPER_BIN} --model {MODEL_FILE} --output_file {temp_wav}'
-                subprocess.run(cmd_gen, shell=True)
-                
-                # 4. Play audio using afplay
-                if os.path.exists(temp_wav):
-                    subprocess.run(["afplay", temp_wav])
-                    os.remove(temp_wav) # Cleanup
+                speak(message)
         else:
             logger.warning("Could not find JSON in model response.")
-            
     except Exception as e:
         logger.error(f"TTS/Audio failed: {e}")
 
     return {"result": raw}
 
+
 @app.post("/infer_vision")
 def infer_vision(req: VisionInferRequest):
-    # ── Build prompts server-side — nothing sensitive travels over the network ──
     bbox_str = (
         f"xmin={int(req.bbox[0])}, ymin={int(req.bbox[1])}, "
         f"xmax={int(req.bbox[2])}, ymax={int(req.bbox[3])}"
     )
     user_prompt = VISION_USER_PROMPT_TEMPLATE.format(bbox=bbox_str)
- 
+
     full_img = PILImage.open(io.BytesIO(base64.b64decode(req.full_image_b64))).convert("RGB")
     crop_img = PILImage.open(io.BytesIO(base64.b64decode(req.crop_image_b64))).convert("RGB")
- 
+
     messages = [
         {"role": "system", "content": VISION_SYSTEM_PROMPT},
         {
@@ -345,22 +300,19 @@ def infer_vision(req: VisionInferRequest):
         },
     ]
     logger.info("→ /infer_vision bbox: %s", bbox_str)
- 
-    # Step 1: apply chat template (text portion only)
+
     text = vision_processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
- 
+
     flush_mps_cache()
- 
-    # Step 2: tokenise text + images together
+
     inputs = vision_processor(
         text=[text],
         images=[full_img, crop_img],
         return_tensors="pt",
     ).to(INFER_DEVICE)
- 
-    # Step 3: generate
+
     try:
         with torch.no_grad():
             outputs = vision_model.generate(
@@ -376,30 +328,27 @@ def infer_vision(req: VisionInferRequest):
         del inputs
         flush_mps_cache()
         raise
- 
-    # Step 4: decode only the new tokens
+
     input_len = inputs["input_ids"].shape[1]
     raw = vision_processor.tokenizer.decode(
         outputs[0][input_len:], skip_special_tokens=True
     ).strip()
- 
+
     del inputs, outputs
     flush_mps_cache()
- 
+
     logger.info("[/infer_vision] raw response: %s", raw)
- 
-    # ── Parse VAD scores server-side ──────────────────────────────
-    # Primary: look for labelled lines e.g. "Valence: 7.5"
+
+    # ── Parse VAD scores ──────────────────────────────────────────
     vad = {}
     for label in ("valence", "arousal", "dominance"):
         match = re.search(rf"{label}:\s*([\d.]+)", raw, re.IGNORECASE)
         if match:
             vad[label] = float(match.group(1))
- 
+
     if len(vad) == 3:
         scores = vad
     else:
-        # Fallback: grab first three numbers anywhere in the response
         nums = re.findall(r"[-+]?\d*\.\d+|\d+", raw)
         fallback = [float(n) for n in nums[:3]] if len(nums) >= 3 else [5.0, 5.0, 5.0]
         scores = {
@@ -407,22 +356,28 @@ def infer_vision(req: VisionInferRequest):
             "arousal":   fallback[1],
             "dominance": fallback[2],
         }
- 
+
     logger.info(
         "[/infer_vision] VAD — V:%.1f A:%.1f D:%.1f",
         scores["valence"], scores["arousal"], scores["dominance"],
     )
-    
+
+    # ── Rule-based emotional check-in + TTS ──────────────────────
+    LOW_THRESHOLD = 4.0
+
+    if scores["valence"] < LOW_THRESHOLD or scores["arousal"] < LOW_THRESHOLD:
+        message = "Hey, you seem a little down. Are you doing okay? I am here if you need anything."
+    else:
+        message = "You seem to be doing well! Keep it up."
+
+    speak(message)
+
     return {
         "valence":   scores["valence"],
         "arousal":   scores["arousal"],
         "dominance": scores["dominance"],
-        "raw":       raw,   # kept for client-side logging/debugging
+        "raw":       raw,
     }
- 
-
-
-
 
 
 @app.exception_handler(Exception)
@@ -433,15 +388,7 @@ async def global_exception_handler(request, exc):
 
 
 if __name__ == "__main__":
-    # FIX #3 (revised): workers=2 caused a double model-load OOM because
-    # uvicorn forks *after* the module-level model loading runs, so each
-    # worker tried to put a full copy of both models onto MPS (9+ GB each).
-    #
-    # Solution: single worker + a restart loop.  If a Metal assertion kills
-    # the process, the loop relaunches it within ~10 s rather than leaving
-    # the server permanently down.  Models are loaded once, in the parent,
-    # before uvicorn starts — the child worker inherits them via fork.
-    import subprocess, sys, time
+    import sys, time
     MAX_RESTARTS = 10
     restarts = 0
     while restarts < MAX_RESTARTS:
