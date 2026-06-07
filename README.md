@@ -43,6 +43,10 @@ The system uses **ROS 2 (Humble)** as middleware connecting hardware control, pe
 | **Lenovo LOQ** (Robot Host) | Runs all ROS 2 nodes. Handles hardware control (Dynamixels, RealSense), STT/TTS, image preprocessing, and the behavioral state machine. |
 | **Ethernet `10.42.0.x`** | High-speed local link passing image crops and JSON payloads between the two machines. |
 
+
+![Alt Text](Images/rosgraph.png)
+All the nodes, aside from cat_brain_planner and lfm_bridge_node, run on the Lenovo LOQ side while the cat_brain_planner and lfm_bridge_node acts as the interface to the Inference server hosted on the Macbook.
+
 ---
 
 ## Codebase Overview
