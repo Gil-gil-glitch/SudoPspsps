@@ -51,27 +51,15 @@ XL430 Pan/Tilt Servos
 
 Planned architecture:
 
-```text
-Camera
-   ↓
-Person Detection
-   ↓
-person_targeting_node
-   ↓
-head_tracker_node
-   ↓
-head_node
-   ↓
-Pan/Tilt Mechanism
+![Alt Text](Images/Communication%20Diagram.png)
 
-Microphone
-   ↓
-STT Node
-   ↓
-lfm_bridge_node
-   ↓
-Conversation & Assistive Behaviors
-```
+| Component  | Responsibility                  |
+| ---------- | ----------------------------- |
+| Lenovo AI Laptop  | Runs the model_server.py that is responsible for running all the LFMs. |
+| Lenovo LOQ Laptop | Contains ROS2 nodes responsible for the control of the robot and data collection. |
+| Ethernet | Sends data from the robot's sensors connected to the Lenovo LOQ Laptop and sends them to the Lenovo AI Laptop |
+
+Note: This setup is only for the LFM competition because of the requirement to use the Lenovo AI Laptop for inference. Because we use ROS2 as a middleware, all components can actually run on a single device (ex: Laptop and microcontrollers). 
 
 ---
 
