@@ -35,21 +35,13 @@ This repository currently contains the head control subsystem, which provides RO
 
 ## Software Architecture
 
-Current architecture:
+System architecture:
 
-```text
-ROS2 Topic
-    ↓
-head_node
-    ↓
-DynamixelDriver
-    ↓
-OpenCR
-    ↓
-XL430 Pan/Tilt Servos
-```
+![Alt Text](Images/SudoPsPsPsArchitecture.drawio.png)
 
-Planned architecture:
+The System is designed, in which ROS2 (Robot Operating System 2) nodes control the robot. The central nodes, cat_brain_planner and lfm_bridge_node, have interfaces to the LFM model, to which it can send data from the other ROS2 nodes for the prompt.
+
+Communication Diagram
 
 ![Alt Text](Images/Communication%20Diagram.png)
 
@@ -63,7 +55,7 @@ Note: This setup is only for the LFM competition because of the requirement to u
 
 ---
 
-# Implemented Components
+# Components
 
 ## Dynamixel Driver
 
@@ -167,21 +159,14 @@ Completed:
 * [x] ROS2 head node
 * [x] Topic-based head control
 * [x] Motion smoothing
-
-In Progress:
-
-* [ ] Head tracker node
-* [ ] Person targeting node
-* [ ] RealSense integration
-* [ ] Face/person tracking
-
-Planned:
-
-* [ ] Liquid AI LFM integration
-* [ ] Speech-to-text node
-* [ ] User state assessment
-* [ ] Conversation management
-* [ ] Assistive check-in behaviors
+* [x] Head tracker node
+* [x] Person targeting node
+* [x] RealSense integration
+* [x] Liquid AI LFM integration
+* [x] Speech-to-text node
+* [x] User state assessment
+* [x] Conversation management
+* [x] Assistive check-in behaviors
 
 ---
 
@@ -199,7 +184,7 @@ Completed
 
 ---
 
-## Phase 2 - Visual Tracking [In-Progress]
+## Phase 2 - Visual Tracking [COMPLETED]
 
 Components:
 
@@ -213,7 +198,7 @@ Goal:
 
 ---
 
-## Phase 3 - Social Intelligence
+## Phase 3 - Social Intelligence [COMPLETED]
 
 Components:
 
@@ -228,7 +213,7 @@ Goal:
 
 ---
 
-## Phase 4 - Assistive Companion Behaviors
+## Phase 4 - Assistive Companion Behaviors [COMPLETED]
 
 Goal:
 
