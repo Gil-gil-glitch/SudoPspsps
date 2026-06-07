@@ -250,6 +250,7 @@ def health():
 def infer(req: InferRequest):
     system_prompt = req.system_prompt or DEFAULT_SYSTEM_PROMPT
 
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user",   "content": req.user_prompt},
