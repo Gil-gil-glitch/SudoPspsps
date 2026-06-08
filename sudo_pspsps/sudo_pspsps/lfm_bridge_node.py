@@ -1,38 +1,29 @@
 import os
-# Force every Hugging Face interaction to stay local (must be set before imports)
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
+import base64
+import io
+import threading
+
+import requests
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float32MultiArray
 from cv_bridge import CvBridge
-import torch
-import re
-import gc
-import threading
-from unsloth import FastVisionModel
 from PIL import Image as PILImage
 
-SYSTEM_PROMPT = (
-    "You are an expert emotion analysis assistant for a robot. "
-    "Predict Valence, Arousal, and Dominance (VAD) scores (1-10 scale). "
-    "You MUST include a rationale for EACH score."
-)
+# ── Server config ─────────────────────────────────────────────────
+# Change this to the Mac's IP address on your local network
+SERVER_URL = "http://10.42.0.2:8000/infer_vision"
 
-# Two images are provided:
-#   Image 1 — full scene with a green bounding box around the detected person.
-#   Image 2 — close-up crop of just that person.
-# The bbox pixel coordinates in the full image are also supplied.
-USER_PROMPT = (
-    "Two images are provided:\n"
-    "  • Image 1: the full scene with a green bounding box at pixel coordinates {bbox}.\n"
-    "  • Image 2: a close-up crop of that person.\n\n"
-    "Analyze this person's emotion using both images for context.\n"
-    "1. Explain the rationale in 2 sentences.\n"
-    "2. On a new line for each, output ONLY: 'Valence: [num]', 'Arousal: [num]', 'Dominance: [num]'."
-)
+
+def pil_to_b64(img: PILImage.Image) -> str:
+    """Encode a PIL image to a base64 JPEG string."""
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
 class LFMBridgeNode(Node):
@@ -41,62 +32,40 @@ class LFMBridgeNode(Node):
         self.bridge = CvBridge()
 
         # Latest data from each topic
-        self.latest_bbox = None
+        self.latest_bbox       = None
         self.latest_full_image = None   # PIL image — full frame with bbox drawn
         self.latest_crop_image = None   # PIL image — cropped person
-
-        self.model = None
-        self.tokenizer = None
-
-        # Load model in background to prevent ROS2 spin freeze
-        self.get_logger().info("Initializing node; loading model in background...")
-        threading.Thread(target=self._load_model, daemon=True).start()
 
         # --- Subscribers ---
         self.create_subscription(
             Float32MultiArray,
             '/pre_processed_bbox',
             self._bbox_callback,
-            10
+            10,
         )
         self.create_subscription(
             Image,
             '/pre_processed_tracker_frame',   # Full image with bbox drawn
             self._full_image_callback,
-            1
+            1,
         )
         self.create_subscription(
             Image,
-            '/pre_processed_person_crop',     # Cropped person image
+            '/pre_processed_person_crop',     # Cropped person image — triggers inference
             self._crop_image_callback,
-            1
+            1,
         )
 
         # --- Publisher ---
         self.publisher = self.create_publisher(Float32MultiArray, '/cat/vad_state', 10)
 
-    # ------------------------------------------------------------------
-    # Model loading
-    # ------------------------------------------------------------------
-    def _load_model(self):
-        try:
-            gc.collect()
-            torch.cuda.empty_cache()
-            self.model, self.tokenizer = FastVisionModel.from_pretrained(
-                model_name="/home/ri-one/SudoPspsps/lfm_model_offline",
-                max_seq_length=512,
-                load_in_4bit=False,
-            )
-            FastVisionModel.for_inference(self.model)
-            self.get_logger().info("Model loaded and ready.")
-        except Exception as e:
-            self.get_logger().error(f"Model loading failed: {e}")
+        self.get_logger().info(f"LFM bridge ready — sending to {SERVER_URL}")
 
     # ------------------------------------------------------------------
-    # Callbacks — just cache the latest value
+    # Callbacks — cache the latest value, inference triggered by crop
     # ------------------------------------------------------------------
     def _bbox_callback(self, msg):
-        self.latest_bbox = msg.data  # (xmin, ymin, xmax, ymax)
+        self.latest_bbox = list(msg.data)   # [xmin, ymin, xmax, ymax]
 
     def _full_image_callback(self, msg):
         try:
@@ -107,9 +76,6 @@ class LFMBridgeNode(Node):
 
     def _crop_image_callback(self, msg):
         """Receives the cropped person image and triggers inference."""
-        if self.model is None:
-            self.get_logger().warn("Model not ready yet, skipping frame.")
-            return
         if self.latest_bbox is None:
             self.get_logger().warn("Waiting for bbox...")
             return
@@ -124,76 +90,44 @@ class LFMBridgeNode(Node):
             self.get_logger().error(f"Crop image conversion error: {e}")
             return
 
-        self._run_inference()
+        # Run in a thread so ROS callbacks aren't blocked during the HTTP call
+        threading.Thread(target=self._run_inference, daemon=True).start()
 
     # ------------------------------------------------------------------
-    # Inference
+    # Inference — just an HTTP POST now, no model on the robot
     # ------------------------------------------------------------------
     def _run_inference(self):
         try:
-            bbox_str = (
-                f"xmin={int(self.latest_bbox[0])}, ymin={int(self.latest_bbox[1])}, "
-                f"xmax={int(self.latest_bbox[2])}, ymax={int(self.latest_bbox[3])}"
+            payload = {
+                "bbox":          self.latest_bbox,
+                "full_image_b64": pil_to_b64(self.latest_full_image),
+                "crop_image_b64": pil_to_b64(self.latest_crop_image),
+            }
+
+            self.get_logger().info(f"Sending request to server (bbox: {self.latest_bbox})...")
+            resp = requests.post(SERVER_URL, json=payload, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Server returns parsed floats directly — no parsing needed here
+            valence   = float(data["valence"])
+            arousal   = float(data["arousal"])
+            dominance = float(data["dominance"])
+
+            # Log the raw model output for debugging
+            self.get_logger().info(f"Raw response: {data.get('raw', '')}")
+            self.get_logger().info(
+                f"VAD scores — V:{valence} A:{arousal} D:{dominance}"
             )
-            prompt_text = USER_PROMPT.format(bbox=bbox_str)
 
-            # Build message: two images followed by the text prompt
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image"},   # Image 1 — full scene
-                        {"type": "image"},   # Image 2 — person crop
-                        {"type": "text", "text": prompt_text},
-                    ],
-                },
-            ]
-
-            text = self.tokenizer.apply_chat_template(
-                messages, add_generation_prompt=True, tokenize=False
+            self.publisher.publish(
+                Float32MultiArray(data=[valence, arousal, dominance])
             )
-            self.get_logger().info(f"Prompt prepared (first 80 chars): {text[:80]}...")
 
-            inputs = self.tokenizer(
-                images=[self.latest_full_image, self.latest_crop_image],
-                text=[text],
-                return_tensors="pt",
-            ).to("cuda")
-
-            self.get_logger().info("Running inference...")
-            with torch.no_grad():
-                out = self.model.generate(
-                    **inputs,
-                    max_new_tokens=150,
-                    temperature=0.7,
-                    do_sample=True,
-                )
-
-            response = self.tokenizer.decode(
-                out[0][inputs["input_ids"].shape[1]:],
-                skip_special_tokens=True,
-            ).strip()
-            self.get_logger().info(f"Raw response: {response}")
-
-            # --- Parse VAD scores ---
-            # Look specifically for labelled lines first for robustness
-            vad = {}
-            for label in ("valence", "arousal", "dominance"):
-                match = re.search(rf"{label}:\s*([\d.]+)", response, re.IGNORECASE)
-                if match:
-                    vad[label] = float(match.group(1))
-
-            if len(vad) == 3:
-                scores = [vad["valence"], vad["arousal"], vad["dominance"]]
-            else:
-                # Fallback: grab first three numbers anywhere in the response
-                nums = re.findall(r"[-+]?\d*\.\d+|\d+", response)
-                scores = [float(n) for n in nums[:3]] if len(nums) >= 3 else [5.0, 5.0, 5.0]
-
-            self.get_logger().info(f"VAD scores — V:{scores[0]} A:{scores[1]} D:{scores[2]}")
-            self.publisher.publish(Float32MultiArray(data=[float(x) for x in scores]))
-
+        except requests.exceptions.Timeout:
+            self.get_logger().error("Request timed out — server may be busy")
+        except requests.exceptions.ConnectionError:
+            self.get_logger().error(f"Cannot reach server at {SERVER_URL}")
         except Exception as e:
             self.get_logger().error(f"Inference error: {e}")
 
