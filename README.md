@@ -1,10 +1,8 @@
-﻿# SudoPsPsPs - Assistive Robot Cat
+# SudoPsPsPs — Assistive Robot Cat
 
-## Overview
+SudoPsPsPs is an assistive robotic cat designed to provide companionship and proactive social interaction. Using a pan-tilt head mechanism, computer vision (Intel RealSense D455), local speech processing, and a Liquid Foundation Model (LFM), the robot maintains attention on users and engages in meaningful, mood-aware conversations.
 
-SudoPsPsPs is an assistive robotic cat designed to provide companionship and proactive social interaction. The robot uses a pan-tilt head mechanism, computer vision, speech processing, and a Liquid AI LFM to maintain attention on users and engage in meaningful interactions.
-
-This repository currently contains the head control subsystem, which provides ROS2-based control of a pan-tilt mechanism driven by Dynamixel XL430-W250-T servos through an OpenCR controller.
+All interactions are driven by **vocal commands and natural conversation**, processed locally via Faster-Whisper, with heavy visual and LLM reasoning offloaded to a dedicated inference server.
 
 
 ![Alt Text](Images/Image%201.png)
@@ -17,275 +15,152 @@ This repository currently contains the head control subsystem, which provides RO
 
 ### Pan-Tilt Mechanism
 
-| Component  | Description                   |
-| ---------- | ----------------------------- |
-| Pan Servo  | Dynamixel XL430-W250-T (ID 1) |
+| Component | Description |
+|-----------|-------------|
+| Pan Servo | Dynamixel XL430-W250-T (ID 1) |
 | Tilt Servo | Dynamixel XL430-W250-T (ID 2) |
-| Controller | OpenCR                        |
-| Interface  | USB Serial                    |
-| Protocol   | Dynamixel Protocol 2.0        |
+| Controller | OpenCR |
+| Interface | USB Serial |
+| Protocol | Dynamixel Protocol 2.0 |
 
-### Sensor Suite (Planned)
+### Sensor & Audio Suite
 
-* Intel RealSense Camera
-* Microphone Array
-* Speaker
+| Component | Details |
+|-----------|---------|
+| Vision | Intel RealSense D455 |
+| Microphone | Steinberg UR22mkII audio interface |
+| Speaker | Local ALSA-routed speaker |
 
 ---
 
 ## Software Architecture
 
-Current architecture:
+The system uses **ROS 2 (Humble)** as middleware connecting hardware control, perception, and reasoning. Two machines communicate over a dedicated Ethernet link.
 
-```text
-ROS2 Topic
-    ↓
-head_node
-    ↓
-DynamixelDriver
-    ↓
-OpenCR
-    ↓
-XL430 Pan/Tilt Servos
-```
+| Machine | Role |
+|---------|------|
+| **Macbook** (Inference Server) | Runs `model_server.py` and the LFM. Handles NLP, task scheduling reasoning, and vision-based VAD emotion inference. |
+| **Lenovo LOQ** (Robot Host) | Runs all ROS 2 nodes. Handles hardware control (Dynamixels, RealSense), STT/TTS, image preprocessing, and the behavioral state machine. |
+| **Ethernet `10.42.0.x`** | High-speed local link passing image crops and JSON payloads between the two machines. |
 
-Planned architecture:
 
-```text
-Camera
-   ↓
-Person Detection
-   ↓
-person_targeting_node
-   ↓
-head_tracker_node
-   ↓
-head_node
-   ↓
-Pan/Tilt Mechanism
-
-Microphone
-   ↓
-STT Node
-   ↓
-lfm_bridge_node
-   ↓
-Conversation & Assistive Behaviors
-```
+![Alt Text](Images/rosgraph.png)
+All the nodes, aside from cat_brain_planner and lfm_bridge_node, run on the Lenovo LOQ side while the cat_brain_planner and lfm_bridge_node acts as the interface to the Inference server hosted on the Macbook.
 
 ---
 
-# Implemented Components
+## Codebase Overview
 
-## Dynamixel Driver
+### Hardware Control
 
-File:
+- **`dynamixel_driver.py`** — OpenCR communication, torque enablement, and startup calibration. Converts degrees to raw Dynamixel 2.0 protocol positions.
+- **`head_node.py`** — ROS 2 hardware abstraction node. Subscribes to `/head/pan_target` and `/head/tilt_target`; applies Exponential Moving Average (EMA) smoothing to motor commands.
 
-```text
-dynamixel_driver.py
-```
+### Vision & Tracking
 
-Responsibilities:
+- **`person_targetting_node.py`** — Core visual state machine (`SEARCHING` → `TRACKING` → `TALKING`). Uses MediaPipe Pose for bounding boxes and implements cat-like kinematics: discrete saccades, generous dead-zones, and curious idle head-tilts.
+- **`image_preprocessor.py`** — Active only when locked onto a user. Crops and resizes RealSense frames (224×224 person crop, 336×336 spatial context) and publishes them for inference.
 
-* OpenCR communication
-* Dynamixel Protocol 2.0 interface
-* Torque enable/disable
-* Position control
-* Startup calibration
-* Angle-to-position conversion
-* Safety limits
+### Audio & Speech Processing
 
-Features:
+- **`stt_node.py`** — Local ASR via `faster-whisper` on GPU. Features an RMS noise threshold gate; publishes transcriptions to `/cat/stt_input`. This is the **primary trigger** for robot interaction.
+- **`tts_node.py`** — Offline TTS using Piper. Subscribes to `/cat/robot_actions`, extracts `message_to_user` from JSON payloads, and routes audio to the local ALSA system.
+- **`speaker_finder.py`** — PyAudio utility to enumerate hardware audio devices and identify the correct speaker index.
 
-* Automatic startup calibration
-* Current servo position becomes logical zero
-* Degree-based control interface
-* Servo abstraction layer
+### AI & Reasoning
 
-Example:
-
-```python
-driver.set_pan(30)
-driver.set_tilt(-10)
-```
+- **`lfm_bridge_node.py`** — Async bridge node. Packages cropped user images as base64 payloads and POSTs them to the Macbook vision model. Publishes Valence, Arousal, and Dominance (VAD) scores to `/cat/emotional_state`.
+- **`cat_brain_planner.py`** — The cognitive core. Manages multi-turn conversation, schedule assignment, and proactive reminders. Fuses STT input with VAD emotional state to generate mood-aware suggestions (e.g., suggesting rest if valence is low).
+- **`train_lora.py`** — Standalone QLoRA fine-tuning script for the LFM2 vision-language model using HuggingFace `peft` and `trl`. Aligns the robot's persona and reasoning with the Sudo dataset.
 
 ---
 
-## Head Node
+## Setup & Launch
 
-File:
+### Network Configuration
 
-```text
-head_node.py
-```
+Connect both machines over Ethernet and assign static IPs:
 
-Responsibilities:
+| Machine | IP |
+|---------|----|
+| Macbook (Inference Server) | `10.42.0.2` |
+| Lenovo LOQ (Robot Host) | `10.42.0.1` |
 
-* ROS2 integration
-* Target angle subscriptions
-* Motion smoothing
-* Hardware abstraction
+---
 
-Subscribed Topics:
-
-```text
-/head/pan_target
-/head/tilt_target
-```
-
-Message Type:
-
-```python
-std_msgs/msg/Float32
-```
-
-Example:
+### 1. Macbook — Start the Inference Server
 
 ```bash
-ros2 topic pub --once \
-/head/pan_target \
-std_msgs/msg/Float32 \
-"{data: 30.0}"
+python model_server.py --host 0.0.0.0 --port 8000
 ```
 
 ---
 
-## Startup Calibration
-
-At startup the current servo positions are stored as the robot's neutral pose.
-
-Example:
-
-```text
-=== ZERO CALIBRATION ===
-Pan Zero  : 2061
-Tilt Zero : 3812
-========================
-```
-
-This allows development without requiring a fixed mechanical home position.
-
----
-
-# Current Status
-
-Completed:
-
-* [x] Dynamixel communication
-* [x] OpenCR integration
-* [x] Servo calibration
-* [x] Pan control
-* [x] Tilt control
-* [x] ROS2 head node
-* [x] Topic-based head control
-* [x] Motion smoothing
-
-In Progress:
-
-* [ ] Head tracker node
-* [ ] Person targeting node
-* [ ] RealSense integration
-* [ ] Face/person tracking
-
-Planned:
-
-* [ ] Liquid AI LFM integration
-* [ ] Speech-to-text node
-* [ ] User state assessment
-* [ ] Conversation management
-* [ ] Assistive check-in behaviors
-
----
-
-# Development Roadmap
-
-## Phase 1 - Head Control [COMPLETED]
-
-Goal:
-
-* Reliable pan-tilt control through ROS2
-
-Status:
-
-Completed
-
----
-
-## Phase 2 - Visual Tracking [In-Progress]
-
-Components:
-
-* head_tracker_node
-* person_targeting_node
-
-Goal:
-
-* Follow a selected user
-* Maintain visual attention
-
----
-
-## Phase 3 - Social Intelligence
-
-Components:
-
-* STT Node
-* lfm_bridge_node
-
-Goal:
-
-* Understand user conversations
-* Assess engagement and user state
-* Generate appropriate responses
-
----
-
-## Phase 4 - Assistive Companion Behaviors
-
-Goal:
-
-* Proactive check-ins
-* Long-term interaction context
-* Emotion-aware conversation
-* Natural companion behaviors
-
----
-
-# Quick Start
-
-Build:
+### 2. Lenovo LOQ — Source the Workspace
 
 ```bash
-colcon build
-source install/setup.bash
+source /opt/ros/humble/setup.bash
+source ~/ri_one_master_ws/install/setup.bash
 ```
 
-Run Head Node:
+---
+
+### 3. Launch Hardware Drivers
 
 ```bash
+ros2 launch realsense2_camera rs_launch.py
 ros2 run sudo_pspsps head_node
 ```
 
-Move Head:
+---
+
+### 4. Spin Up Perception & Audio Nodes
+
+Open separate terminals for each:
 
 ```bash
-ros2 topic pub --once \
-/head/pan_target \
-std_msgs/msg/Float32 \
-"{data: 30.0}"
-```
-
-Return Home:
-
-```bash
-ros2 topic pub --once \
-/head/pan_target \
-std_msgs/msg/Float32 \
-"{data: 0.0}"
+ros2 run sudo_pspsps person_targetting_node
+ros2 run sudo_pspsps image_preprocessor
+ros2 run sudo_pspsps stt_node
+ros2 run sudo_pspsps tts_node
 ```
 
 ---
 
-# Team Vision
+### 5. Start Bridging & Planning Nodes
 
-The goal of SudoPsPsPs is to create a robotic companion capable of maintaining attention, understanding conversational context, and proactively checking in on users through natural interaction. Rather than simply reacting to commands, the robot aims to act as a supportive social presence powered by multimodal perception and Liquid AI reasoning.
+```bash
+ros2 run sudo_pspsps lfm_bridge_node
+ros2 run sudo_pspsps cat_brain_planner
+```
+
+---
+
+### Manual Head Test
+
+To verify servo movement before launching the planner:
+
+```bash
+ros2 topic pub --once /head/pan_target std_msgs/msg/Float32 "{data: 30.0}"
+```
+
+---
+
+## Current Status
+
+| Feature | Status |
+|---------|--------|
+| Dynamixel communication & ROS 2 head node | Complete |
+| Cat-like saccade motion profiling | Complete |
+| MediaPipe person tracking & targeting | Complete |
+| Local Whisper STT & Piper TTS | Complete |
+| Async LFM HTTP bridging to Macbook | Complete |
+| VAD emotional state assessment from RealSense crops | Complete |
+| Conversational task planning & proactive mood suggestions | Complete |
+| QLoRA training pipeline for LFM persona alignment | Complete |
+
+---
+
+## Team Vision
+
+SudoPsPsPs aims to be a robotic companion capable of maintaining attention, understanding conversational context, and proactively checking in on users — not by reacting to physical triggers, but by acting as a supportive social presence guided by vocal input, multimodal perception, and advanced LLM reasoning.
