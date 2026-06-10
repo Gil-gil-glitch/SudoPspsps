@@ -1,22 +1,37 @@
 #
 ## dynamixel_driver.py
 #
-#  Driver for the Dynamixel pan-tilt mechanism on the cat head.
+#  Controls the two Dynamixel servo motors that move the cat's head.
+#
+#  This file is NOT a ROS2 node. It is a plain Python class that wraps
+#  the Dynamixel SDK so the rest of the code never has to deal with
+#  low-level serial communication directly.
+#
+#  The two motors are:
+#    Pan  (ID 1) — rotates the head left and right
+#    Tilt (ID 2) — nods the head up and down
+#
+#  All angles are in degrees, measured from the calibrated zero position.
+#  Positive pan  = right
+#  Positive tilt = up
 #
 
 from dynamixel_sdk import PortHandler, PacketHandler
 import time
 
-# XL430 Control Table Addresses
-ADDR_TORQUE_ENABLE = 64
-ADDR_GOAL_POSITION = 116
-ADDR_PRESENT_POSITION = 132
+# ── Dynamixel XL430 control table addresses ───────────────────────────────────
+# These are fixed memory locations on the servo. Writing to them changes
+# behaviour; reading from them reports current state.
+ADDR_TORQUE_ENABLE   = 64   # 1 = motor holds position, 0 = free-spinning
+ADDR_GOAL_POSITION   = 116  # write here to move the motor
+ADDR_PRESENT_POSITION = 132  # read here to get current position
 
-TORQUE_ENABLE = 1
+TORQUE_ENABLE  = 1
 TORQUE_DISABLE = 0
 
-PROTOCOL_VERSION = 2.0
+PROTOCOL_VERSION = 2.0  # XL430 uses Dynamixel Protocol 2
 
+# The XL430 encoder has 4096 steps over 360 degrees.
 TICKS_PER_DEGREE = 4095.0 / 360.0
 
 
@@ -24,208 +39,123 @@ class DynamixelDriver:
 
     def __init__(
         self,
-        device_name="/dev/ttyACM0",
-        baudrate=1000000,
-        pan_id=1,
-        tilt_id=2,
+        device_name = "/dev/ttyACM0",  # USB serial port
+        baudrate    = 1000000,          # 1 Mbps — must match servo settings
+        pan_id      = 1,
+        tilt_id     = 2,
     ):
-
-        self.pan_id = pan_id
+        self.pan_id  = pan_id
         self.tilt_id = tilt_id
 
-        self.port_handler = PortHandler(device_name)
+        # PortHandler manages the serial connection.
+        # PacketHandler builds and parses Dynamixel protocol packets.
+        self.port_handler   = PortHandler(device_name)
         self.packet_handler = PacketHandler(PROTOCOL_VERSION)
 
         if not self.port_handler.openPort():
-            raise RuntimeError(
-                f"Failed to open port {device_name}"
-            )
+            raise RuntimeError(f"Could not open port {device_name}")
 
         if not self.port_handler.setBaudRate(baudrate):
-            raise RuntimeError(
-                f"Failed to set baudrate {baudrate}"
-            )
+            raise RuntimeError(f"Could not set baudrate to {baudrate}")
 
-        print(f"Connected to {device_name}")
+        print(f"Connected to Dynamixel servos on {device_name}")
 
-        self.pan_zero = 0
+        # Zero positions are set by calibrate_zero() at startup.
+        # All angle commands are offsets from these values.
+        self.pan_zero  = 0
         self.tilt_zero = 0
 
-    # Communication Helpers
-    def ping(self, dxl_id):
 
-        model, comm_result, error = (
-            self.packet_handler.ping(
-                self.port_handler,
-                dxl_id
-            )
-        )
+    # ── Hardware limits ───────────────────────────────────────────────────────
+    # These prevent the head from rotating into the cat's own body.
+    PAN_MIN  = -60   # degrees left
+    PAN_MAX  =  60   # degrees right
+    TILT_MIN = -15   # degrees down
+    TILT_MAX =  20   # degrees up
 
-        print(
-            f"PING ID={dxl_id} "
-            f"MODEL={model} "
-            f"COMM={comm_result} "
-            f"ERROR={error}"
-        )
 
-        return comm_result == 0
+    # ── Calibration ───────────────────────────────────────────────────────────
 
-    # Torque
-    def enable_torque(self, dxl_id):
+    def calibrate_zero(self):
+        """
+        Read the current motor positions and save them as "zero".
+        Call this once at startup while the head is pointing straight forward.
+        All future angle commands will be relative to this position.
+        """
+        self.pan_zero  = self._read_position(self.pan_id)
+        self.tilt_zero = self._read_position(self.tilt_id)
 
-        comm_result, error = (
-            self.packet_handler.write1ByteTxRx(
-                self.port_handler,
-                dxl_id,
-                ADDR_TORQUE_ENABLE,
-                TORQUE_ENABLE,
-            )
-        )
+        print()
+        print("=== Zero calibration complete ===")
+        print(f"  Pan  zero tick : {self.pan_zero}")
+        print(f"  Tilt zero tick : {self.tilt_zero}")
+        print("=================================")
+        print()
 
-        print(
-            f"Enable Torque ID={dxl_id} "
-            f"COMM={comm_result} "
-            f"ERROR={error}"
-        )
 
-    def disable_torque(self, dxl_id):
-
-        self.packet_handler.write1ByteTxRx(
-            self.port_handler,
-            dxl_id,
-            ADDR_TORQUE_ENABLE,
-            TORQUE_DISABLE,
-        )
+    # ── Torque control ────────────────────────────────────────────────────────
 
     def enable(self):
-
-        self.enable_torque(self.pan_id)
-        self.enable_torque(self.tilt_id)
+        """Lock both motors so they hold their positions."""
+        self._set_torque(self.pan_id,  TORQUE_ENABLE)
+        self._set_torque(self.tilt_id, TORQUE_ENABLE)
 
     def disable(self):
+        """Release both motors so they can spin freely (safe for power-off)."""
+        self._set_torque(self.pan_id,  TORQUE_DISABLE)
+        self._set_torque(self.tilt_id, TORQUE_DISABLE)
 
-        self.disable_torque(self.pan_id)
-        self.disable_torque(self.tilt_id)
 
-    # Raw Position Access
-    def read_position(self, dxl_id):
+    # ── Pan control ───────────────────────────────────────────────────────────
 
-        position, comm_result, error = (
-            self.packet_handler.read4ByteTxRx(
-                self.port_handler,
-                dxl_id,
-                ADDR_PRESENT_POSITION,
-            )
+    def set_pan(self, angle):
+        """
+        Move the pan motor to `angle` degrees from the zero position.
+        Automatically clamps to PAN_MIN / PAN_MAX so the head can't
+        spin into the body.
+        """
+        angle    = max(self.PAN_MIN, min(self.PAN_MAX, angle))
+        position = int(self.pan_zero + angle * TICKS_PER_DEGREE)
+        self._write_position(self.pan_id, position)
+
+
+    # ── Tilt control ──────────────────────────────────────────────────────────
+
+    def set_tilt(self, angle):
+        """
+        Move the tilt motor to `angle` degrees from the zero position.
+        Automatically clamps to TILT_MIN / TILT_MAX.
+        """
+        angle    = max(self.TILT_MIN, min(self.TILT_MAX, angle))
+        position = int(self.tilt_zero + angle * TICKS_PER_DEGREE)
+        self._write_position(self.tilt_id, position)
+
+
+    # ── Cleanup ───────────────────────────────────────────────────────────────
+
+    def close(self):
+        """Close the serial port. Always call this before the program exits."""
+        self.port_handler.closePort()
+
+
+    # ── Private helpers ───────────────────────────────────────────────────────
+    # Students don't need to read these — they are just wrappers around
+    # the Dynamixel SDK calls.
+
+    def _set_torque(self, dxl_id, value):
+        self.packet_handler.write1ByteTxRx(
+            self.port_handler, dxl_id, ADDR_TORQUE_ENABLE, value
         )
 
+    def _read_position(self, dxl_id):
+        position, comm_result, _ = self.packet_handler.read4ByteTxRx(
+            self.port_handler, dxl_id, ADDR_PRESENT_POSITION
+        )
         if comm_result != 0:
-            print(
-                f"Read Error ID={dxl_id} "
-                f"COMM={comm_result}"
-            )
-
+            print(f"Warning: could not read position from motor ID {dxl_id}")
         return position
 
-    def write_position(self, dxl_id, position):
-
-        comm_result, error = (
-            self.packet_handler.write4ByteTxRx(
-                self.port_handler,
-                dxl_id,
-                ADDR_GOAL_POSITION,
-                int(position),
-            )
+    def _write_position(self, dxl_id, position):
+        self.packet_handler.write4ByteTxRx(
+            self.port_handler, dxl_id, ADDR_GOAL_POSITION, int(position)
         )
-
-        #print(
-        #    f"Write ID={dxl_id} "
-        #    f"POS={position} "
-        #    f"COMM={comm_result} "
-        #    f"ERROR={error}"
-        #)
-
-    # Calibration
-    def calibrate_zero(self):
-
-        self.pan_zero = self.read_position(
-            self.pan_id
-        )
-
-        self.tilt_zero = self.read_position(
-            self.tilt_id
-        )
-
-        print()
-        print("=== ZERO CALIBRATION ===")
-        print(f"Pan Zero  : {self.pan_zero}")
-        print(f"Tilt Zero : {self.tilt_zero}")
-        print("========================")
-        print()
-
-    # Safe Limits
-    PAN_MIN = -60
-    PAN_MAX = 60
-
-    TILT_MIN = -15
-    TILT_MAX = 20
-
-    # Pan Control
-    def set_pan(self, angle):
-
-        angle = max(
-            self.PAN_MIN,
-            min(self.PAN_MAX, angle)
-        )
-
-        position = int(
-            self.pan_zero +
-            angle * TICKS_PER_DEGREE
-        )
-
-        self.write_position(
-            self.pan_id,
-            position
-        )
-
-    def get_pan(self):
-
-        position = self.read_position(
-            self.pan_id
-        )
-
-        return (
-            position - self.pan_zero
-        ) / TICKS_PER_DEGREE
-
-    # Tilt Control
-    def set_tilt(self, angle):
-
-        angle = max(
-            self.TILT_MIN,
-            min(self.TILT_MAX, angle)
-        )
-
-        position = int(
-            self.tilt_zero +
-            angle * TICKS_PER_DEGREE
-        )
-
-        self.write_position(
-            self.tilt_id,
-            position
-        )
-
-    def get_tilt(self):
-
-        position = self.read_position(
-            self.tilt_id
-        )
-
-        return (
-            position - self.tilt_zero
-        ) / TICKS_PER_DEGREE
-
-    # Cleanup
-    def close(self):
-
-        self.port_handler.closePort()
